@@ -1,15 +1,12 @@
 import os
 import telebot
 import subprocess
-import zipfile
 import shutil
-
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # ================= CONFIG =================
 TOKEN = "7992708923:AAGemnJ94TFf7ft8LyoG8JNqKUDkSty4RDo"
 ADMIN_ID = 8150875959
-
 BASE_DIR = "/root/hosts/"
 
 bot = telebot.TeleBot(TOKEN)
@@ -17,27 +14,12 @@ bot = telebot.TeleBot(TOKEN)
 # ================= DATA =================
 allowed_users = [ADMIN_ID]
 user_step = {}
-host_data = {}
 DATA = {}
 running_process = {}
 
 # ================= ACCESS =================
 def is_allowed(uid):
     return uid in allowed_users
-
-# ================= ADMIN =================
-@bot.message_handler(commands=['adduser'])
-def add_user(msg):
-    if msg.from_user.id != ADMIN_ID:
-        return
-
-    try:
-        uid = int(msg.text.split()[1])
-        if uid not in allowed_users:
-            allowed_users.append(uid)
-            bot.reply_to(msg, f"✅ Added {uid}")
-    except:
-        bot.reply_to(msg, "Use: /adduser user_id")
 
 # ================= START =================
 @bot.message_handler(commands=['start'])
@@ -54,22 +36,15 @@ def start(msg):
         InlineKeyboardButton("📁 Files", callback_data="files")
     )
 
-    bot.send_message(
-        msg.chat.id,
-        "🔥 VPS HOSTING PANEL\n\nSelect option:",
-        reply_markup=markup
-    )
+    bot.send_message(msg.chat.id, "🔥 VPS HOSTING PANEL", reply_markup=markup)
 
 # ================= HOST FLOW =================
 @bot.callback_query_handler(func=lambda c: c.data == "host")
 def host_start(call):
-    if not is_allowed(call.from_user.id):
-        return
-
     user_step[call.from_user.id] = {"step": "name"}
     bot.edit_message_text("👉 Enter bot name:", call.message.chat.id, call.message.message_id)
 
-@bot.message_handler(func=lambda msg: msg.from_user.id in user_step)
+@bot.message_handler(func=lambda m: m.from_user.id in user_step)
 def steps(msg):
     uid = msg.from_user.id
     step = user_step[uid]["step"]
@@ -82,25 +57,19 @@ def steps(msg):
     elif step == "repo":
         user_step[uid]["repo"] = msg.text
         user_step[uid]["step"] = "cmd"
-        bot.reply_to(msg,
-            "⚙️ Send ALL commands in ONE message\nExample:\n"
-            "pip install -r requirements.txt\npython bot.py"
-        )
+        bot.reply_to(msg, "⚙️ Send ALL commands (multi-line)")
 
     elif step == "cmd":
-        raw_cmds = msg.text.split("\n")
-        commands = [c.strip() for c in raw_cmds if c.strip()]
-
+        commands = [c.strip() for c in msg.text.split("\n") if c.strip()]
         name = user_step[uid]["name"]
         repo = user_step[uid]["repo"]
 
         bot.reply_to(msg, "⏳ Hosting started...")
 
         run_host(msg, name, repo, commands)
-
         del user_step[uid]
 
-# ================= PROGRESS HOST =================
+# ================= HOST FUNCTION =================
 def run_host(msg, name, repo, commands):
     path = BASE_DIR + name
 
@@ -120,14 +89,23 @@ def run_host(msg, name, repo, commands):
         )
 
     try:
-        # Clone
+        # Clone repo
         subprocess.run(f"git clone {repo} {path}", shell=True)
         current += 1
         update()
 
-        # Commands
-        for cmd in commands:
-            subprocess.run(f"cd {path} && {cmd}", shell=True)
+        # Run commands
+        for i, cmd in enumerate(commands):
+            if i == len(commands) - 1:
+                # Last command (start) → background
+                process = subprocess.Popen(
+                    f"cd {path} && {cmd}",
+                    shell=True
+                )
+                running_process[name] = process
+            else:
+                subprocess.run(f"cd {path} && {cmd}", shell=True)
+
             current += 1
             update()
 
@@ -138,7 +116,7 @@ def run_host(msg, name, repo, commands):
         }
 
         bot.edit_message_text(
-            f"✅ Host Complete: {name}",
+            f"✅ Host Complete: {name}\n🚀 Running in background",
             msg.chat.id,
             progress.message_id
         )
@@ -149,24 +127,16 @@ def run_host(msg, name, repo, commands):
 # ================= BOTS =================
 @bot.callback_query_handler(func=lambda c: c.data == "bots")
 def bots(call):
-    if not is_allowed(call.from_user.id):
-        return
-
     markup = InlineKeyboardMarkup()
 
     for name in DATA:
         markup.add(InlineKeyboardButton(name, callback_data=f"bot_{name}"))
 
-    bot.edit_message_text(
-        "🤖 Your Bots:",
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=markup
-    )
+    bot.edit_message_text("🤖 Bots:", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
 # ================= BOT PANEL =================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("bot_"))
-def bot_panel(call):
+def panel(call):
     name = call.data.split("_")[1]
 
     markup = InlineKeyboardMarkup()
@@ -179,12 +149,7 @@ def bot_panel(call):
         InlineKeyboardButton("❌ Delete", callback_data=f"delete_{name}")
     )
 
-    bot.edit_message_text(
-        f"⚙️ {name} Control Panel",
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=markup
-    )
+    bot.edit_message_text(f"⚙️ {name}", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
 # ================= CONTROLS =================
 @bot.callback_query_handler(func=lambda c: True)
@@ -200,7 +165,6 @@ def control(call):
             f"cd {DATA[name]['path']} && {start_cmd}",
             shell=True
         )
-
         running_process[name] = process
         bot.answer_callback_query(call.id, "Started")
 
@@ -225,8 +189,8 @@ def control(call):
             f"cd {DATA[name]['path']} && {start_cmd}",
             shell=True
         )
-
         running_process[name] = process
+
         bot.answer_callback_query(call.id, "Restarted")
 
     elif data.startswith("delete_"):
@@ -243,11 +207,8 @@ def control(call):
 # ================= FILES =================
 @bot.callback_query_handler(func=lambda c: c.data == "files")
 def files(call):
-    base = BASE_DIR
-
     for name in DATA:
         zip_path = f"/root/{name}.zip"
-
         shutil.make_archive(f"/root/{name}", 'zip', DATA[name]["path"])
         bot.send_document(call.message.chat.id, open(zip_path, 'rb'))
 
